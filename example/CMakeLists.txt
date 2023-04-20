@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.11)
-project(gst_uni)
+project(gst_my_example)
 
 set(CMAKE_CXX_STANDARD 17)
 find_package(PkgConfig REQUIRED)
@@ -14,7 +14,12 @@ pkg_check_modules(SOUP REQUIRED libsoup-2.4)
 pkg_check_modules(JSON-GLIB REQUIRED json-glib-1.0)
 
 include_directories(${GLIB_INCLUDE_DIRS} ${GST_INCLUDE_DIRS} ${SOUP_INCLUDE_DIRS} ${JSON-GLIB_INCLUDE_DIRS})
-add_executable(gst_uni unidirectional.c)
+set(SUPPORT_LIBRARIES ${GLIB_LIBRARIES} ${GST_LIBRARIES} ${SOUP_LIBRARIES} ${JSON-GLIB_LIBRARIES})
 
-target_compile_options(gst_uni PRIVATE ${GST_CFLAGS})
-target_link_libraries(gst_uni ${GLIB_LIBRARIES} ${GST_LIBRARIES} ${SOUP_LIBRARIES} ${JSON-GLIB_LIBRARIES})
+add_executable(unidirectional unidirectional.c)
+target_compile_options(unidirectional PRIVATE ${GST_CFLAGS})
+target_link_libraries(unidirectional ${SUPPORT_LIBRARIES})
+add_executable(sendrecv sendrecv.c)
+target_compile_options(sendrecv PRIVATE ${GST_CFLAGS})
+# target_link_options(sendrecv PUBLIC "LINKER:-L" "LINKER:--verbose")
+target_link_libraries(sendrecv ${SUPPORT_LIBRARIES})
