@@ -22,7 +22,7 @@
 #ifdef G_OS_WIN32
 #define VIDEO_SRC "mfvideosrc"
 #else
-#define VIDEO_SRC "v4l2src"
+#define VIDEO_SRC "videotestsrc"
 #endif
 
 gchar *video_priority = NULL;
@@ -168,6 +168,8 @@ const gchar *html_source = " \n \
 
 static gboolean bus_watch_cb(GstBus *bus, GstMessage *message,
                              gpointer user_data) {
+  GstPipeline *pipeline = user_data;
+
   switch (GST_MESSAGE_TYPE(message)) {
   case GST_MESSAGE_ERROR: {
     GError *error = NULL;
@@ -189,6 +191,9 @@ static gboolean bus_watch_cb(GstBus *bus, GstMessage *message,
     g_free(debug);
     break;
   }
+  case GST_MESSAGE_LATENCY:
+    gst_bin_recalculate_latency(GST_BIN(pipeline));
+    break;
   default:
     break;
   }
@@ -219,7 +224,7 @@ ReceiverEntry *create_receiver_entry(SoupWebsocketConnection *connection) {
   GArray *transceivers;
   GstBus *bus;
 
-  receiver_entry = g_slice_alloc0(sizeof(ReceiverEntry));
+  receiver_entry = g_new0(ReceiverEntry, 1);
   receiver_entry->connection = connection;
 
   g_object_ref(G_OBJECT(connection));
@@ -241,10 +246,11 @@ ReceiverEntry *create_receiver_entry(SoupWebsocketConnection *connection) {
       "aggregate-mode=zero-latency ! "
       "application/"
       "x-rtp,media=video,encoding-name=H264,payload=" RTP_PAYLOAD_TYPE
-      " ! webrtcbin "
-      "autoaudiosrc ! queue max-size-buffers=1 leaky=downstream ! "
-      "audioconvert ! audioresample ! opusenc ! rtpopuspay "
-      "pt=" RTP_AUDIO_PAYLOAD_TYPE " ! webrtcbin. ",
+      " ! webrtcbin. "
+      "autoaudiosrc ! queue max-size-buffers=1 leaky=downstream"
+      " ! audioconvert ! audioresample ! opusenc  ! rtpopuspay "
+      "pt=" RTP_AUDIO_PAYLOAD_TYPE " ! application/x-rtp, encoding-name=OPUS !"
+      " webrtcbin. ",
       &error);
   if (error != NULL) {
     g_error("Could not create WebRTC pipeline: %s\n", error->message);
@@ -299,7 +305,7 @@ ReceiverEntry *create_receiver_entry(SoupWebsocketConnection *connection) {
                    G_CALLBACK(on_ice_candidate_cb), (gpointer)receiver_entry);
 
   bus = gst_pipeline_get_bus(GST_PIPELINE(receiver_entry->pipeline));
-  gst_bus_add_watch(bus, bus_watch_cb, NULL);
+  gst_bus_add_watch(bus, bus_watch_cb, receiver_entry->pipeline);
   gst_object_unref(bus);
 
   if (gst_element_set_state(receiver_entry->pipeline, GST_STATE_PLAYING) ==
@@ -319,8 +325,14 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
   g_assert(receiver_entry != NULL);
 
   if (receiver_entry->pipeline != NULL) {
+    GstBus *bus;
+
     gst_element_set_state(GST_ELEMENT(receiver_entry->pipeline),
                           GST_STATE_NULL);
+
+    bus = gst_pipeline_get_bus(GST_PIPELINE(receiver_entry->pipeline));
+    gst_bus_remove_watch(bus);
+    gst_object_unref(bus);
 
     gst_object_unref(GST_OBJECT(receiver_entry->webrtcbin));
     gst_object_unref(GST_OBJECT(receiver_entry->pipeline));
@@ -329,7 +341,7 @@ void destroy_receiver_entry(gpointer receiver_entry_ptr) {
   if (receiver_entry->connection != NULL)
     g_object_unref(G_OBJECT(receiver_entry->connection));
 
-  g_slice_free1(sizeof(ReceiverEntry), receiver_entry);
+  g_free(receiver_entry);
 }
 
 void on_offer_created_cb(GstPromise *promise, gpointer user_data) {
@@ -411,7 +423,7 @@ void soup_websocket_message_cb(
     G_GNUC_UNUSED SoupWebsocketConnection *connection,
     SoupWebsocketDataType data_type, GBytes *message, gpointer user_data) {
   gsize size;
-  gchar *data;
+  const gchar *data;
   gchar *data_string;
   const gchar *type_string;
   JsonNode *root_json;
@@ -423,14 +435,12 @@ void soup_websocket_message_cb(
   switch (data_type) {
   case SOUP_WEBSOCKET_DATA_BINARY:
     g_error("Received unknown binary message, ignoring\n");
-    g_bytes_unref(message);
     return;
 
   case SOUP_WEBSOCKET_DATA_TEXT:
-    data = g_bytes_unref_to_data(message, &size);
+    data = g_bytes_get_data(message, &size);
     /* Convert to NULL-terminated string */
     data_string = g_strndup(data, size);
-    g_free(data);
     break;
 
   default:
